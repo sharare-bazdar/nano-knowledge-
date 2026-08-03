@@ -5,45 +5,123 @@ import chromadb
 from chromadb.utils import embedding_functions
 from groq import Groq
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
-import json
-import os
+import json, os
 
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 GROQ_MODEL = "llama-3.1-8b-instant"
-HISTORY_FILE = "analysis_history.json"
+HISTORY_FILE = "history.json"
+
+# رنگ‌های NanoDaru
+PRIMARY = "#003f7f"
+ACCENT = "#e91e8c"
+BG = "#f8f9fc"
 
 st.set_page_config(
-    page_title="سامانه یکپارچه‌سازی دانش",
+    page_title="NanoDaru | سامانه دانش",
     page_icon="🔬",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.markdown("""
+st.markdown(f"""
 <style>
-body { direction: rtl; font-family: Tahoma; }
-.stApp { direction: rtl; }
-[data-testid="stSidebar"] { direction: rtl; }
+    /* فونت و جهت */
+    * {{ font-family: Tahoma, sans-serif; }}
+    body {{ direction: rtl; background: {BG}; }}
+    .stApp {{ background: {BG}; direction: rtl; }}
+    [data-testid="stSidebar"] {{
+        background: {PRIMARY};
+        direction: rtl;
+    }}
+    [data-testid="stSidebar"] * {{ color: white !important; }}
+    [data-testid="stSidebar"] .stTextInput input {{
+        background: rgba(255,255,255,0.1);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+        border-radius: 6px;
+    }}
+    [data-testid="stSidebar"] .stFileUploader {{
+        background: rgba(255,255,255,0.05);
+        border-radius: 8px;
+        padding: 8px;
+    }}
+
+    /* دکمه اصلی */
+    .stButton > button {{
+        background: {ACCENT} !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-size: 15px !important;
+        padding: 10px !important;
+        transition: opacity 0.2s;
+    }}
+    .stButton > button:hover {{ opacity: 0.85; }}
+
+    /* هدر */
+    .nano-header {{
+        background: linear-gradient(135deg, {PRIMARY}, #0066cc);
+        padding: 25px 30px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        color: white;
+    }}
+    .nano-header h1 {{ font-size: 24px; margin: 0; }}
+    .nano-header p {{ color: rgba(255,255,255,0.7); margin: 5px 0 0; font-size: 13px; }}
+
+    /* کارت آمار */
+    .stat-card {{
+        padding: 20px;
+        border-radius: 12px;
+        text-align: center;
+        color: white;
+        margin: 5px 0;
+    }}
+    .stat-card .num {{ font-size: 36px; font-weight: bold; }}
+    .stat-card .lbl {{ font-size: 13px; opacity: 0.9; }}
+
+    /* کارت نتیجه */
+    .result-card {{
+        background: white;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        border-right: 4px solid #ddd;
+    }}
+    .result-card.CONFLICT {{ border-color: #e53935; }}
+    .result-card.GAP {{ border-color: #fb8c00; }}
+    .result-card.ALIGNED {{ border-color: #43a047; }}
+
+    /* تب‌ها */
+    .stTabs [data-baseweb="tab"] {{
+        font-size: 14px;
+        padding: 10px 20px;
+    }}
+    .stTabs [aria-selected="true"] {{
+        color: {PRIMARY} !important;
+        border-bottom-color: {ACCENT} !important;
+    }}
+
+    /* چت */
+    .stChatMessage {{ border-radius: 10px; }}
+
+    /* حذف watermark */
+    #MainMenu, footer {{ visibility: hidden; }}
 </style>
 """, unsafe_allow_html=True)
 
 
 def read_file(uploaded_file):
-    """PDF یا TXT رو می‌خونه و متن برمیگردونه"""
     if uploaded_file.name.lower().endswith(".pdf"):
         doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        return text
+        return "\n".join(page.get_text() for page in doc)
     return uploaded_file.read().decode("utf-8", errors="ignore")
 
 def chunk_document(text, source_name):
-    """
-    متن رو به بخش‌های معنادار تقسیم می‌کنه
-    اول سعی می‌کنه بر اساس عنوان‌ها تقسیم کنه
-    اگه بخش خیلی بزرگ شد، بر اساس اندازه تقسیم می‌کنه
-    """
     chunks, idx, section, current = [], 0, "مقدمه", ""
     for line in text.split('\n'):
         s = line.strip()
@@ -51,101 +129,53 @@ def chunk_document(text, source_name):
             current += "\n"
             continue
         is_header = bool(re.match(
-            r'^\d+[\.\-]\s|^[۱-۹]\.\s|^(بخش|فصل|ماده|تبصره|Article|Section)\s|^\d+\.\d+',
-            s))
+            r'^\d+[\.\-]\s|^[۱-۹]\.\s|^(بخش|فصل|ماده|تبصره|Article|Section)\s|^\d+\.\d+', s))
         if is_header:
             if current.strip() and len(current.strip()) > 80:
-                chunks.append({
-                    "id": f"{source_name}_{idx}",
-                    "text": current.strip(),
-                    "source": source_name,
-                    "section": section,
-                    "chunk_index": idx
-                })
+                chunks.append({"id": f"{source_name}_{idx}", "text": current.strip(),
+                               "source": source_name, "section": section, "chunk_index": idx})
                 idx += 1
-            section = s[:60]
-            current = s + "\n"
+            section, current = s[:60], s + "\n"
         else:
             current += s + "\n"
             if len(current) > 800:
-                chunks.append({
-                    "id": f"{source_name}_{idx}",
-                    "text": current.strip(),
-                    "source": source_name,
-                    "section": section,
-                    "chunk_index": idx
-                })
+                chunks.append({"id": f"{source_name}_{idx}", "text": current.strip(),
+                               "source": source_name, "section": section, "chunk_index": idx})
                 idx += 1
                 current = ""
     if current.strip() and len(current.strip()) > 80:
-        chunks.append({
-            "id": f"{source_name}_{idx}",
-            "text": current.strip(),
-            "source": source_name,
-            "section": section,
-            "chunk_index": idx
-        })
+        chunks.append({"id": f"{source_name}_{idx}", "text": current.strip(),
+                       "source": source_name, "section": section, "chunk_index": idx})
     return chunks
 
-
 def get_fresh_collection():
-    """
-    هر بار یه collection تازه می‌سازه
-    مشکل cache قبلی رو حل می‌کنه
-    """
     client = chromadb.EphemeralClient()
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL)
-    try:
-        client.delete_collection("docs")
-    except:
-        pass
-    return client.get_or_create_collection(
-        "docs",
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"}
-    )
+    ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+    try: client.delete_collection("docs")
+    except: pass
+    return client.get_or_create_collection("docs", embedding_function=ef,
+                                            metadata={"hnsw:space": "cosine"})
 
 def add_chunks(col, chunks):
-    """chunk ها رو به پایگاه دانش اضافه می‌کنه"""
-    if not chunks:
-        return
-    col.add(
-        ids=[c["id"] for c in chunks],
-        documents=[c["text"] for c in chunks],
-        metadatas=[{
-            "source": c["source"],
-            "section": c["section"],
-            "chunk_index": str(c["chunk_index"])
-        } for c in chunks]
-    )
+    if chunks:
+        col.add(ids=[c["id"] for c in chunks],
+                documents=[c["text"] for c in chunks],
+                metadatas=[{"source": c["source"], "section": c["section"],
+                            "chunk_index": str(c["chunk_index"])} for c in chunks])
 
-def find_similar(col, query, source_filter, top_k=3):
-    """
-    برای یه متن، مشابه‌ترین بخش‌های سند دیگه رو پیدا می‌کنه
-    از embedding های معنایی استفاده می‌کنه
-    """
+def find_similar(col, query, source_filter, top_k=2):
     try:
-        res = col.query(
-            query_texts=[query],
-            n_results=top_k,
-            where={"source": source_filter}
-        )
+        res = col.query(query_texts=[query], n_results=top_k,
+                        where={"source": source_filter})
         if res and res["documents"] and res["documents"][0]:
-            return [{
-                "text": doc,
-                "source": res["metadatas"][0][i]["source"],
-                "section": res["metadatas"][0][i]["section"],
-                "distance": res["distances"][0][i] if res.get("distances") else 0
-            } for i, doc in enumerate(res["documents"][0])]
-    except:
-        pass
+            return [{"text": doc, "source": res["metadatas"][0][i]["source"],
+                     "section": res["metadatas"][0][i]["section"]}
+                    for i, doc in enumerate(res["documents"][0])]
+    except: pass
     return []
 
 
-
-ANALYSIS_PROMPT = """تو یک متخصص تحلیل اسناد دارویی و سازمانی هستی.
-دو بخش از دو سند مختلف داری:
+ANALYSIS_PROMPT = """تو متخصص تحلیل اسناد دارویی هستی.
 
 --- سند اول ({source_a}) ---
 {text_a}
@@ -153,294 +183,264 @@ ANALYSIS_PROMPT = """تو یک متخصص تحلیل اسناد دارویی و 
 --- سند دوم ({source_b}) ---
 {text_b}
 
-رابطه این دو بخش رو تحلیل کن.
-فقط و فقط به این فرمت جواب بده، هیچ چیز اضافه ننویس:
-
+فقط به این فرمت جواب بده:
 STATUS: [ALIGNED/CONFLICT/GAP/UNRELATED]
-TOPIC: [موضوع مشترک در یک جمله فارسی]
+TOPIC: [موضوع در یک جمله فارسی]
 DETAIL: [توضیح دقیق فارسی - حداکثر 2 جمله]
-RISK: [LOW/MEDIUM/HIGH]
-
-راهنما:
-- ALIGNED: هر دو سند یک چیز می‌گن
-- CONFLICT: دو سند در یک موضوع حرف‌های متناقض می‌زنن
-- GAP: یک سند اطلاعاتی داره که سند دیگه نداره
-- UNRELATED: این دو بخش ربطی به هم ندارن"""
+RISK: [LOW/MEDIUM/HIGH]"""
 
 def analyze_pair(client, text_a, text_b, source_a, source_b):
-    """
-    یه جفت chunk رو با LLM تحلیل می‌کنه
-    خروجی: وضعیت، موضوع، توضیح، سطح ریسک
-    """
     try:
         res = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[{"role": "user", "content": ANALYSIS_PROMPT.format(
                 source_a=source_a, text_a=text_a[:600],
-                source_b=source_b, text_b=text_b[:600]
-            )}],
-            max_tokens=300,
-            temperature=0.1
-        )
+                source_b=source_b, text_b=text_b[:600])}],
+            max_tokens=300, temperature=0.1)
         raw = res.choices[0].message.content.strip()
-        result = {
-            "status": "UNKNOWN", "topic": "", "detail": "", "risk": "LOW",
-            "text_a": text_a[:250], "text_b": text_b[:250],
-            "source_a": source_a, "source_b": source_b
-        }
+        result = {"status": "UNKNOWN", "topic": "", "detail": "", "risk": "LOW",
+                  "text_a": text_a[:250], "text_b": text_b[:250],
+                  "source_a": source_a, "source_b": source_b}
         for line in raw.split('\n'):
             line = line.strip()
             if line.startswith("STATUS:"):
                 s = line.replace("STATUS:", "").strip()
-                if s in ["ALIGNED","CONFLICT","GAP","UNRELATED"]:
-                    result["status"] = s
-            elif line.startswith("TOPIC:"):
-                result["topic"] = line.replace("TOPIC:", "").strip()
-            elif line.startswith("DETAIL:"):
-                result["detail"] = line.replace("DETAIL:", "").strip()
+                if s in ["ALIGNED","CONFLICT","GAP","UNRELATED"]: result["status"] = s
+            elif line.startswith("TOPIC:"): result["topic"] = line.replace("TOPIC:","").strip()
+            elif line.startswith("DETAIL:"): result["detail"] = line.replace("DETAIL:","").strip()
             elif line.startswith("RISK:"):
-                r = line.replace("RISK:", "").strip()
-                if r in ["LOW","MEDIUM","HIGH"]:
-                    result["risk"] = r
+                r = line.replace("RISK:","").strip()
+                if r in ["LOW","MEDIUM","HIGH"]: result["risk"] = r
         return result
     except Exception as e:
-        return {
-            "status": "ERROR", "topic": "خطا", "detail": str(e),
-            "risk": "UNKNOWN", "text_a": text_a[:250], "text_b": text_b[:250],
-            "source_a": source_a, "source_b": source_b
-        }
+        return {"status":"ERROR","topic":"خطا","detail":str(e),"risk":"UNKNOWN",
+                "text_a":text_a[:250],"text_b":text_b[:250],
+                "source_a":source_a,"source_b":source_b}
 
-def run_analysis(groq_client, col, chunks_a, name_a, name_b, max_pairs, progress_bar):
-    """pipeline اصلی تحلیل"""
-    results, seen = [], set()
-    to_process = chunks_a[:max_pairs]
-
-    for i, chunk in enumerate(to_process):
-        progress_bar.progress(
-            (i+1)/len(to_process),
-            text=f"تحلیل chunk {i+1} از {len(to_process)}..."
-        )
-        similars = find_similar(col, chunk["text"], name_b, top_k=2)
-        for sim in similars:
-            key = (chunk["text"][:50], sim["text"][:50])
-            if key in seen:
-                continue
-            seen.add(key)
-            r = analyze_pair(groq_client, chunk["text"], sim["text"], name_a, name_b)
-            if r["status"] not in ["UNRELATED", "UNKNOWN"]:
-                results.append(r)
-
-    return results
-
-
-
-def save_to_history(name_a, name_b, results):
-    """نتایج رو با تاریخ ذخیره می‌کنه"""
+def save_history(name_a, name_b, results):
     history = load_history()
-    entry = {
+    history.append({
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "doc_a": name_a,
-        "doc_b": name_b,
-        "total": len(results),
+        "doc_a": name_a, "doc_b": name_b,
         "conflicts": sum(1 for r in results if r["status"]=="CONFLICT"),
         "gaps": sum(1 for r in results if r["status"]=="GAP"),
         "aligned": sum(1 for r in results if r["status"]=="ALIGNED"),
         "results": results
-    }
-    history.append(entry)
+    })
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 def load_history():
-    """تاریخچه تحلیل‌های قبلی رو می‌خونه"""
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, encoding="utf-8") as f:
                 return json.load(f)
-        except:
-            pass
+        except: pass
     return []
 
 
+STATUS_FA = {"CONFLICT":"❌ تضاد","GAP":"⚠️ شکاف",
+             "ALIGNED":"✅ هم‌راستا","UNKNOWN":"❓","ERROR":"🔴 خطا"}
+RISK_FA = {"HIGH":"🔴 بالا","MEDIUM":"🟡 متوسط","LOW":"🟢 پایین","UNKNOWN":"❓"}
+RISK_COLOR = {"HIGH":"#e53935","MEDIUM":"#fb8c00","LOW":"#43a047","UNKNOWN":"#999"}
 
-def generate_csv(results, name_a, name_b):
-    """گزارش CSV می‌سازه"""
-    STATUS_FA = {
-        "CONFLICT":"تضاد", "GAP":"شکاف",
-        "ALIGNED":"هم‌راستا", "UNKNOWN":"نامشخص", "ERROR":"خطا"
-    }
-    RISK_FA = {"HIGH":"بالا", "MEDIUM":"متوسط", "LOW":"پایین", "UNKNOWN":"نامشخص"}
-
-    df = pd.DataFrame([{
-        "وضعیت": STATUS_FA.get(r["status"], r["status"]),
-        "موضوع": r["topic"],
-        "ریسک": RISK_FA.get(r["risk"], r["risk"]),
-        "توضیح": r["detail"],
-        f"متن {name_a}": r["text_a"],
-        f"متن {name_b}": r["text_b"],
-    } for r in results])
-    return df.to_csv(index=False).encode("utf-8-sig")
-
-
-STATUS_FA = {
-    "CONFLICT":"❌ تضاد", "GAP":"⚠️ شکاف",
-    "ALIGNED":"✅ هم‌راستا", "UNKNOWN":"❓", "ERROR":"🔴 خطا"
-}
-RISK_FA = {
-    "HIGH":"🔴 بالا", "MEDIUM":"🟡 متوسط",
-    "LOW":"🟢 پایین", "UNKNOWN":"❓"
-}
-RISK_COLOR = {"HIGH":"#e53935", "MEDIUM":"#fb8c00", "LOW":"#43a047", "UNKNOWN":"#999"}
-
-st.title("🔬 سامانه یکپارچه‌سازی دانش سازمانی")
-st.caption("Multi-Source Knowledge Integration System | فاز پایلوت — NanoDaru Pharmaceutical")
-st.divider()
+# هدر
+st.markdown(f"""
+<div class="nano-header">
+  <h1>🔬 سامانه یکپارچه‌سازی دانش سازمانی</h1>
+  <p>Multi-Source Knowledge Integration System | NanoDaru Pharmaceutical</p>
+</div>
+""", unsafe_allow_html=True)
 
 # سایدبار
 with st.sidebar:
-    st.header("⚙️ تنظیمات")
-    api_key = st.text_input("🔑 Groq API Key", type="password",
-                             help="از console.groq.com رایگان بگیر")
-    st.divider()
-    st.subheader("📄 آپلود اسناد")
+    st.markdown("### 🔑 API Key")
+    api_key = st.text_input("Groq API Key", type="password", label_visibility="collapsed",
+                             placeholder="gsk_...")
+    st.markdown("---")
+    st.markdown("### 📄 اسناد")
     name_a = st.text_input("نام سند اول", value="SOP")
     name_b = st.text_input("نام سند دوم", value="مقررات")
     file_a = st.file_uploader("سند اول", type=["pdf","txt"])
     file_b = st.file_uploader("سند دوم", type=["pdf","txt"])
-    st.divider()
-    max_pairs = st.slider("تعداد chunk برای تحلیل", 5, 40, 15,
-                          help="بیشتر = دقیق‌تر ولی کندتر")
-    run_btn = st.button("▶ شروع تحلیل", type="primary",
-                        use_container_width=True)
-    st.caption("⚠️ این سیستم مرجع نهایی نیست — نیاز به بررسی کارشناس دارد")
+    st.markdown("---")
+    max_pairs = st.slider("عمق تحلیل", 5, 40, 15)
+    run_btn = st.button("▶ شروع تحلیل", type="primary", use_container_width=True)
+    st.markdown("---")
+    st.markdown("<small style='opacity:0.6'>⚠️ این سیستم جایگزین کارشناس نیست</small>",
+                unsafe_allow_html=True)
 
 # تب‌ها
-tab1, tab2, tab3 = st.tabs(["📊 تحلیل تضاد", "💬 چت‌بات", "📋 تاریخچه"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 تحلیل تضاد", "📈 داشبورد", "💬 چت‌بات", "📋 تاریخچه"])
 
 # ── تب ۱: تحلیل ───────────────────────────────────────────────
 with tab1:
     if not file_a or not file_b:
-        st.info("👆 دو فایل رو از سایدبار آپلود کن")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("قابلیت", "تحلیل تضاد")
-        col2.metric("قابلیت", "شناسایی شکاف")
-        col3.metric("قابلیت", "چت‌بات هوشمند")
+        st.info("👆 از سایدبار دو فایل آپلود کن و API Key وارد کن")
         st.stop()
 
     if run_btn:
         if not api_key:
-            st.error("❌ Groq API Key رو از سایدبار وارد کن")
+            st.error("❌ API Key وارد کن")
             st.stop()
 
         groq_client = Groq(api_key=api_key)
 
-        with st.status("در حال پردازش اسناد...", expanded=True) as status:
-            st.write(f"📖 خواندن {name_a}...")
+        with st.status("در حال پردازش...", expanded=True) as status:
             text_a = read_file(file_a)
             chunks_a = chunk_document(text_a, name_a)
             st.write(f"✅ {name_a}: {len(chunks_a)} بخش")
-
-            st.write(f"📖 خواندن {name_b}...")
             text_b = read_file(file_b)
             chunks_b = chunk_document(text_b, name_b)
             st.write(f"✅ {name_b}: {len(chunks_b)} بخش")
-
-            st.write("🗄️ ایندکس‌گذاری...")
             col_db = get_fresh_collection()
             add_chunks(col_db, chunks_a)
             add_chunks(col_db, chunks_b)
             st.write("✅ پایگاه دانش آماده شد")
-            status.update(label="✅ آماده برای تحلیل", state="complete")
+            status.update(label="✅ آماده", state="complete")
 
-        st.session_state["col_db"] = col_db
-        st.session_state["name_a"] = name_a
-        st.session_state["name_b"] = name_b
-        st.session_state["groq_client"] = groq_client
-        st.session_state["chat_history"] = []
+        st.session_state.update({
+            "col_db": col_db, "name_a": name_a, "name_b": name_b,
+            "groq_client": groq_client, "chat_history": [],
+            "chunks_a": chunks_a
+        })
 
-        bar = st.progress(0, text="در حال تحلیل...")
-        results = run_analysis(groq_client, col_db, chunks_a,
-                               name_a, name_b, max_pairs, bar)
+        results, seen = [], set()
+        bar = st.progress(0)
+        for i, chunk in enumerate(chunks_a[:max_pairs]):
+            bar.progress((i+1)/max_pairs, text=f"chunk {i+1}/{max_pairs}")
+            for sim in find_similar(col_db, chunk["text"], name_b):
+                key = (chunk["text"][:50], sim["text"][:50])
+                if key in seen: continue
+                seen.add(key)
+                r = analyze_pair(groq_client, chunk["text"], sim["text"], name_a, name_b)
+                if r["status"] not in ["UNRELATED","UNKNOWN"]: results.append(r)
         bar.empty()
 
-        save_to_history(name_a, name_b, results)
+        save_history(name_a, name_b, results)
         st.session_state["results"] = results
 
     if "results" in st.session_state:
         results = st.session_state["results"]
-        na = st.session_state.get("name_a", "سند اول")
-        nb = st.session_state.get("name_b", "سند دوم")
+        na = st.session_state.get("name_a","سند اول")
+        nb = st.session_state.get("name_b","سند دوم")
 
-        if not results:
-            st.warning("هیچ بخش مرتبطی پیدا نشد")
-            st.stop()
-
-        # آمار
-        n_conflict = sum(1 for r in results if r["status"]=="CONFLICT")
-        n_gap = sum(1 for r in results if r["status"]=="GAP")
-        n_aligned = sum(1 for r in results if r["status"]=="ALIGNED")
-        n_high = sum(1 for r in results if r["risk"]=="HIGH")
+        n_c = sum(1 for r in results if r["status"]=="CONFLICT")
+        n_g = sum(1 for r in results if r["status"]=="GAP")
+        n_a = sum(1 for r in results if r["status"]=="ALIGNED")
+        n_h = sum(1 for r in results if r["risk"]=="HIGH")
 
         c1,c2,c3,c4 = st.columns(4)
-        c1.metric("❌ تضاد", n_conflict)
-        c2.metric("⚠️ شکاف", n_gap)
-        c3.metric("✅ هم‌راستا", n_aligned)
-        c4.metric("🔴 ریسک بالا", n_high)
+        c1.markdown(f'<div class="stat-card" style="background:#e53935"><div class="num">{n_c}</div><div class="lbl">❌ تضاد</div></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="stat-card" style="background:#fb8c00"><div class="num">{n_g}</div><div class="lbl">⚠️ شکاف</div></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="stat-card" style="background:#43a047"><div class="num">{n_a}</div><div class="lbl">✅ هم‌راستا</div></div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="stat-card" style="background:{PRIMARY}"><div class="num">{n_h}</div><div class="lbl">🔴 ریسک بالا</div></div>', unsafe_allow_html=True)
+
         st.divider()
-
-        # فیلتر
-        f1, f2 = st.columns(2)
-        with f1:
-            filter_status = st.multiselect(
-                "فیلتر وضعیت",
-                ["CONFLICT","GAP","ALIGNED"],
-                default=["CONFLICT","GAP"]
-            )
-        with f2:
-            filter_risk = st.multiselect(
-                "فیلتر ریسک",
-                ["HIGH","MEDIUM","LOW"],
-                default=["HIGH","MEDIUM"]
-            )
-
-        filtered = [r for r in results
-                    if r["status"] in filter_status
-                    and r["risk"] in filter_risk]
-
-        st.caption(f"{len(filtered)} مورد از {len(results)} نمایش داده میشه")
+        f1,f2 = st.columns(2)
+        filter_s = f1.multiselect("وضعیت", ["CONFLICT","GAP","ALIGNED"],
+                                   default=["CONFLICT","GAP"])
+        filter_r = f2.multiselect("ریسک", ["HIGH","MEDIUM","LOW"],
+                                   default=["HIGH","MEDIUM"])
+        filtered = [r for r in results if r["status"] in filter_s and r["risk"] in filter_r]
+        st.caption(f"{len(filtered)} از {len(results)} مورد")
 
         for r in filtered:
-            color = RISK_COLOR.get(r["risk"], "#999")
-            with st.expander(
-                f"{STATUS_FA.get(r['status'])} | "
-                f"ریسک: {RISK_FA.get(r['risk'])} | {r['topic']}",
-                expanded=(r["risk"]=="HIGH")
-            ):
-                ca, cb = st.columns(2)
+            st.markdown(f"""
+            <div class="result-card {r['status']}">
+              <b>{STATUS_FA.get(r['status'])} | ریسک: {RISK_FA.get(r['risk'])} | {r['topic']}</b>
+              <p style='color:#555;margin:6px 0;font-size:13px'>{r['detail']}</p>
+            </div>""", unsafe_allow_html=True)
+            with st.expander("نمایش متن‌ها"):
+                ca,cb = st.columns(2)
                 with ca:
                     st.markdown(f"**📄 {r['source_a']}**")
                     st.info(r["text_a"])
                 with cb:
                     st.markdown(f"**📄 {r['source_b']}**")
                     st.info(r["text_b"])
-                st.warning(f"💬 {r['detail']}")
-                st.caption("⚠️ این تحلیل نیاز به بررسی کارشناس انسانی دارد")
 
         st.divider()
-        st.download_button(
-            "⬇️ دانلود گزارش CSV",
-            generate_csv(results, na, nb),
-            f"report_{na}_{nb}_{datetime.now().strftime('%Y%m%d')}.csv",
-            "text/csv"
-        )
+        df = pd.DataFrame([{
+            "وضعیت": STATUS_FA.get(r["status"]),
+            "موضوع": r["topic"],
+            "ریسک": RISK_FA.get(r["risk"]),
+            "توضیح": r["detail"],
+            f"متن {na}": r["text_a"],
+            f"متن {nb}": r["text_b"],
+        } for r in results])
+        st.download_button("⬇️ دانلود CSV",
+                           df.to_csv(index=False).encode("utf-8-sig"),
+                           f"report_{datetime.now().strftime('%Y%m%d')}.csv",
+                           "text/csv")
 
-# ── تب ۲: چت‌بات ──────────────────────────────────────────────
+# ── تب ۲: داشبورد Excel + نمودار ─────────────────────────────
 with tab2:
-    if "col_db" not in st.session_state:
-        st.info("👆 اول از تب 'تحلیل تضاد' فایل‌ها رو آپلود و تحلیل کن")
-        st.stop()
+    st.subheader("📈 تحلیل داده‌های Excel")
 
-    st.markdown("از اسناد آپلود شده سوال بپرس")
+    excel_file = st.file_uploader("فایل Excel آپلود کن", type=["xlsx","xls","csv"])
+
+    if excel_file:
+        if excel_file.name.endswith(".csv"):
+            df_excel = pd.read_csv(excel_file)
+        else:
+            df_excel = pd.read_excel(excel_file)
+
+        st.markdown("**پیش‌نمایش داده‌ها:**")
+        st.dataframe(df_excel.head(20), use_container_width=True)
+
+        numeric_cols = df_excel.select_dtypes(include='number').columns.tolist()
+        all_cols = df_excel.columns.tolist()
+
+        if numeric_cols:
+            st.divider()
+            st.markdown("**ساخت نمودار:**")
+            c1,c2,c3 = st.columns(3)
+            chart_type = c1.selectbox("نوع نمودار",
+                ["ستونی","خطی","پراکندگی","دایره‌ای","هیستوگرام"])
+            x_col = c2.selectbox("محور X", all_cols)
+            y_col = c3.selectbox("محور Y", numeric_cols)
+
+            color_col = st.selectbox("رنگ‌بندی بر اساس (اختیاری)",
+                                      ["ندارد"] + all_cols)
+            color = None if color_col == "ندارد" else color_col
+
+            if chart_type == "ستونی":
+                fig = px.bar(df_excel, x=x_col, y=y_col, color=color,
+                             color_discrete_sequence=[PRIMARY, ACCENT])
+            elif chart_type == "خطی":
+                fig = px.line(df_excel, x=x_col, y=y_col, color=color,
+                              color_discrete_sequence=[PRIMARY, ACCENT])
+            elif chart_type == "پراکندگی":
+                fig = px.scatter(df_excel, x=x_col, y=y_col, color=color,
+                                 color_discrete_sequence=[PRIMARY, ACCENT])
+            elif chart_type == "دایره‌ای":
+                fig = px.pie(df_excel, names=x_col, values=y_col,
+                             color_discrete_sequence=[PRIMARY, ACCENT, "#0099cc","#ff69b4"])
+            else:
+                fig = px.histogram(df_excel, x=y_col,
+                                   color_discrete_sequence=[PRIMARY])
+
+            fig.update_layout(
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                font_family="Tahoma",
+                title_font_color=PRIMARY
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("**آمار پایه:**")
+            st.dataframe(df_excel[numeric_cols].describe(), use_container_width=True)
+        else:
+            st.warning("فایل شما ستون عددی ندارد")
+    else:
+        st.info("یه فایل Excel یا CSV آپلود کن تا نمودار بسازیم")
+
+# ── تب ۳: چت‌بات ──────────────────────────────────────────────
+with tab3:
+    if "col_db" not in st.session_state:
+        st.info("👆 اول از تب تحلیل، فایل‌ها رو آپلود و تحلیل کن")
+        st.stop()
 
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
@@ -449,9 +449,8 @@ with tab2:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    if question := st.chat_input("سوالت رو بنویس..."):
-        st.session_state["chat_history"].append(
-            {"role": "user", "content": question})
+    if question := st.chat_input("از اسناد سوال بپرس..."):
+        st.session_state["chat_history"].append({"role":"user","content":question})
         with st.chat_message("user"):
             st.write(question)
 
@@ -464,45 +463,40 @@ with tab2:
         sim_b = find_similar(col_db, question, nb, top_k=2)
         context = "\n".join(
             [f"[{na}]: {c['text'][:400]}" for c in sim_a] +
-            [f"[{nb}]: {c['text'][:400]}" for c in sim_b]
-        )
+            [f"[{nb}]: {c['text'][:400]}" for c in sim_b])
 
         with st.chat_message("assistant"):
-            with st.spinner("در حال پاسخ..."):
+            with st.spinner("..."):
                 try:
                     res = gc.chat.completions.create(
                         model=GROQ_MODEL,
-                        messages=[{"role": "user", "content":
-                            f"بر اساس این اسناد به سوال جواب بده:\n{context}\n\n"
-                            f"سوال: {question}\n"
-                            f"جواب دقیق و کوتاه فارسی:"}],
-                        max_tokens=500,
-                        temperature=0.3
-                    )
+                        messages=[{"role":"user","content":
+                            f"بر اساس این اسناد جواب بده:\n{context}\n\nسوال: {question}\nجواب فارسی:"}],
+                        max_tokens=500, temperature=0.3)
                     answer = res.choices[0].message.content.strip()
                 except Exception as e:
                     answer = f"خطا: {e}"
                 st.write(answer)
-                st.session_state["chat_history"].append(
-                    {"role": "assistant", "content": answer})
+                st.session_state["chat_history"].append({"role":"assistant","content":answer})
 
-# ── تب ۳: تاریخچه ─────────────────────────────────────────────
-with tab3:
+# ── تب ۴: تاریخچه ─────────────────────────────────────────────
+with tab4:
     st.subheader("📋 تاریخچه تحلیل‌ها")
     history = load_history()
 
     if not history:
-        st.info("هنوز هیچ تحلیلی انجام نشده")
+        st.info("هنوز تحلیلی انجام نشده")
         st.stop()
 
     for entry in reversed(history):
         with st.expander(
-            f"📅 {entry['date']} | {entry['doc_a']} vs {entry['doc_b']} | "
-            f"تضاد: {entry['conflicts']} | شکاف: {entry['gaps']}"
-        ):
+            f"📅 {entry['date']} | {entry['doc_a']} vs {entry['doc_b']}"):
             c1,c2,c3 = st.columns(3)
             c1.metric("تضاد", entry["conflicts"])
             c2.metric("شکاف", entry["gaps"])
             c3.metric("هم‌راستا", entry["aligned"])
 
 
+
+
+                
