@@ -26,30 +26,60 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+
 st.markdown(f"""
 <style>
-    /* فونت و جهت */
     * {{ font-family: Tahoma, sans-serif; }}
     body {{ direction: rtl; background: {BG}; }}
     .stApp {{ background: {BG}; direction: rtl; }}
+
     [data-testid="stSidebar"] {{
         background: {PRIMARY};
         direction: rtl;
     }}
-    [data-testid="stSidebar"] * {{ color: white !important; }}
-    [data-testid="stSidebar"] .stTextInput input {{
-        background: rgba(255,255,255,0.1);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.3);
-        border-radius: 6px;
-    }}
-    [data-testid="stSidebar"] .stFileUploader {{
-        background: rgba(255,255,255,0.05);
-        border-radius: 8px;
-        padding: 8px;
+
+    /* رنگ همه متن‌های سایدبار */
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div,
+    [data-testid="stSidebar"] small,
+    [data-testid="stSidebar"] .stMarkdown {{
+        color: white !important;
     }}
 
-    /* دکمه اصلی */
+    /* input های سایدبار */
+    [data-testid="stSidebar"] input {{
+        background: white !important;
+        color: {PRIMARY} !important;
+        border: none !important;
+        border-radius: 6px !important;
+        font-family: Tahoma !important;
+    }}
+
+    /* placeholder */
+    [data-testid="stSidebar"] input::placeholder {{
+        color: #aaa !important;
+    }}
+
+    /* file uploader */
+    [data-testid="stSidebar"] [data-testid="stFileUploader"] {{
+        background: rgba(255,255,255,0.15) !important;
+        border-radius: 8px !important;
+        padding: 8px !important;
+        border: 1px dashed rgba(255,255,255,0.4) !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stFileUploader"] * {{
+        color: white !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stFileUploader"] button {{
+        background: white !important;
+        color: {PRIMARY} !important;
+        border-radius: 6px !important;
+    }}
+
+    /* دکمه */
     .stButton > button {{
         background: {ACCENT} !important;
         color: white !important;
@@ -57,7 +87,6 @@ st.markdown(f"""
         border-radius: 8px !important;
         font-size: 15px !important;
         padding: 10px !important;
-        transition: opacity 0.2s;
     }}
     .stButton > button:hover {{ opacity: 0.85; }}
 
@@ -96,23 +125,16 @@ st.markdown(f"""
     .result-card.GAP {{ border-color: #fb8c00; }}
     .result-card.ALIGNED {{ border-color: #43a047; }}
 
-    /* تب‌ها */
-    .stTabs [data-baseweb="tab"] {{
-        font-size: 14px;
-        padding: 10px 20px;
-    }}
     .stTabs [aria-selected="true"] {{
         color: {PRIMARY} !important;
         border-bottom-color: {ACCENT} !important;
     }}
 
-    /* چت */
-    .stChatMessage {{ border-radius: 10px; }}
-
-    /* حذف watermark */
     #MainMenu, footer {{ visibility: hidden; }}
 </style>
 """, unsafe_allow_html=True)
+
+
 
 
 def read_file(uploaded_file):
@@ -175,7 +197,7 @@ def find_similar(col, query, source_filter, top_k=2):
     return []
 
 
-ANALYSIS_PROMPT = """تو متخصص تحلیل اسناد دارویی هستی.
+ANALYSIS_PROMPT = """تو متخصص تحلیل اسناد دارویی و کنترل کیفیت هستی.
 
 --- سند اول ({source_a}) ---
 {text_a}
@@ -183,11 +205,21 @@ ANALYSIS_PROMPT = """تو متخصص تحلیل اسناد دارویی هستی
 --- سند دوم ({source_b}) ---
 {text_b}
 
+این دو بخش رو با هم مقایسه کن. به اسامی مواد، غلظت‌ها، دماها، بازه‌های زمانی و اعداد دقت کن.
+
 فقط به این فرمت جواب بده:
 STATUS: [ALIGNED/CONFLICT/GAP/UNRELATED]
 TOPIC: [موضوع در یک جمله فارسی]
-DETAIL: [توضیح دقیق فارسی - حداکثر 2 جمله]
-RISK: [LOW/MEDIUM/HIGH]"""
+DETAIL: [توضیح دقیق فارسی با ذکر اعداد و مقادیر مهم]
+RISK: [LOW/MEDIUM/HIGH]
+
+راهنما:
+- CONFLICT: اختلاف در اعداد، مقادیر، یا دستورالعمل‌ها
+- GAP: یک سند اطلاعاتی داره که دیگری نداره
+- ALIGNED: هر دو یک چیز می‌گن
+- UNRELATED: ربطی به هم ندارن"""
+
+
 
 def analyze_pair(client, text_a, text_b, source_a, source_b):
     try:
@@ -253,22 +285,42 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # سایدبار
+
 with st.sidebar:
     st.markdown("### 🔑 API Key")
-    api_key = st.text_input("Groq API Key", type="password", label_visibility="collapsed",
+    api_key = st.text_input("Groq API Key", type="password",
+                             label_visibility="collapsed",
                              placeholder="gsk_...")
     st.markdown("---")
     st.markdown("### 📄 اسناد")
     name_a = st.text_input("نام سند اول", value="SOP")
     name_b = st.text_input("نام سند دوم", value="مقررات")
-    file_a = st.file_uploader("سند اول", type=["pdf","txt"])
-    file_b = st.file_uploader("سند دوم", type=["pdf","txt"])
+    file_a = st.file_uploader("📎 سند اول (PDF/TXT)", type=["pdf","txt"])
+    file_b = st.file_uploader("📎 سند دوم (PDF/TXT)", type=["pdf","txt"])
     st.markdown("---")
-    max_pairs = st.slider("عمق تحلیل", 5, 40, 15)
-    run_btn = st.button("▶ شروع تحلیل", type="primary", use_container_width=True)
+    run_btn = st.button("▶ شروع تحلیل", type="primary",
+                        use_container_width=True)
+
+    # تاریخچه زیر دکمه
     st.markdown("---")
-    st.markdown("<small style='opacity:0.6'>⚠️ این سیستم جایگزین کارشناس نیست</small>",
+    st.markdown("### 📋 تاریخچه")
+    history = load_history()
+    if history:
+        for entry in reversed(history[-5:]):
+            st.markdown(f"""
+            <div style='background:rgba(255,255,255,0.1);border-radius:6px;
+                        padding:8px;margin:5px 0;font-size:12px'>
+              📅 {entry['date']}<br>
+              {entry['doc_a']} vs {entry['doc_b']}<br>
+              ❌{entry['conflicts']} ⚠️{entry['gaps']} ✅{entry['aligned']}
+            </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("<small>هنوز تحلیلی نشده</small>", unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("<small style='opacity:0.6'>⚠️ نیاز به بررسی کارشناس</small>",
                 unsafe_allow_html=True)
+
 
 # تب‌ها
 tab1, tab2, tab3, tab4 = st.tabs(["📊 تحلیل تضاد", "📈 داشبورد", "💬 چت‌بات", "📋 تاریخچه"])
@@ -306,9 +358,11 @@ with tab1:
         })
 
         results, seen = [], set()
+        MAX_CHUNKS = 50
+        total = min(len(chunks_a), MAX_CHUNKS)
         bar = st.progress(0)
-        for i, chunk in enumerate(chunks_a[:max_pairs]):
-            bar.progress((i+1)/max_pairs, text=f"chunk {i+1}/{max_pairs}")
+        for i, chunk in enumerate(chunks_a[:MAX_CHUNKS]):
+            bar.progress((i+1)/total, text=f"تحلیل بخش {i+1} از {total}")
             for sim in find_similar(col_db, chunk["text"], name_b):
                 key = (chunk["text"][:50], sim["text"][:50])
                 if key in seen: continue
